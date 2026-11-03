@@ -59,8 +59,9 @@ let cur=0,sel=3,mode='menu',K=[],me,T,S,N,t0=0,rt=0,cdn=0,HZ=[],PJ=[],BX=[],cam=
  Servidores públicos gratuitos são compartilhados e podem falhar em horário de pico. */
 const MY_TURN=null;
 const SIGNAL=null; /* null = servidor de salas gratuito do PeerJS. Se tiver o seu: {host:'seu.servidor',port:443,path:'/',secure:true} */
-const ICE=[...(MY_TURN||[]),{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'},{urls:'turn:eu-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:'turn:us-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}];
-const mkPO=relay=>({...(SIGNAL||{}),debug:0,config:{iceServers:ICE,iceCandidatePoolSize:4,iceTransportPolicy:relay?'relay':'all'}});
+let SAVED=null;try{SAVED=JSON.parse(localStorage.getItem('tak_turn')||'null')}catch(e){}
+const getICE=()=>[...(SAVED&&SAVED.u?[{urls:SAVED.u.split(/[ ,]+/).filter(Boolean),username:SAVED.n,credential:SAVED.p}]:[]),...(MY_TURN||[]),{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'},{urls:'turn:eu-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:'turn:us-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}];
+const mkPO=relay=>({...(SIGNAL||{}),debug:0,config:{iceServers:getICE(),iceCandidatePoolSize:4,iceTransportPolicy:relay?'relay':'all'}});
 let peer,conns=[],host=false,hostConn,slot=0,lobby=[],roomCode='',ns=1;
 /* ===== AUDIO ===== */
 let AC,mute=0,tmr,mi=0,nx=0,NB;
@@ -76,7 +77,7 @@ function music(n){stopM();if(mute||!AC)return;const t=TR[n],sp=30/t.bpm,r=rng(n*
  mi=0;nx=AC.currentTime+.1;
  tmr=setInterval(()=>{while(nx<AC.currentTime+.2){const i=mi%32;note(mel[i],nx,sp*.9,t.wv,.07);if(i%2==0)note(t.root-24+[0,0,sc[2],sc[3]][(i>>1)%4],nx,sp*1.8,'triangle',.16);if(i%4==0)kick(nx);if(i%2)hat(nx);mi++;nx+=sp}},30)}
 /* ===== REDE (PeerJS) ===== */
-let lastRx=0,wl=null,lastCode='';
+let lastRx=0,wl=null,lastCode='',lastIce1='';
 const sendOne=(c,m)=>{try{c.send(m)}catch(e){}};
 const congested=c=>!!(c.dataChannel&&c.dataChannel.bufferedAmount>16000);
 /* lossy=1: posições; se o canal estiver engarrafado, descarta em vez de acumular atraso */
@@ -88,6 +89,9 @@ const nb=m=>{nbEl.textContent=m;nbEl.style.display=m?'block':'none'};
 async function wake(){try{if('wakeLock' in navigator&&!wl){wl=await navigator.wakeLock.request('screen');wl.addEventListener('release',()=>{wl=null})}}catch(e){}}
 function relWake(){try{wl&&wl.release()}catch(e){}wl=null}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&peer)wake()});
+function watchIce(c){c.ice={host:0,srflx:0,relay:0};const pc=c.peerConnection;if(!pc)return;pc.addEventListener('icecandidate',e=>{if(e.candidate){const t=(e.candidate.candidate.match(/ typ (\w+)/)||[])[1];if(t&&c.ice[t]!=null)c.ice[t]++}})}
+const iceInfo=c=>c&&c.ice?'host '+c.ice.host+' · srflx '+c.ice.srflx+' · relay '+c.ice.relay+' · estado '+(c.peerConnection?c.peerConnection.iceConnectionState:'?'):'sem dados';
+function saveTurn(){const u=$('tu').value.trim(),n=$('tn').value.trim(),p=$('tp').value.trim();try{if(u)localStorage.setItem('tak_turn',JSON.stringify({u,n,p}));else localStorage.removeItem('tak_turn');SAVED=u?{u,n,p}:null}catch(e){}menu(u?'TURN salvo ✔ (use o mesmo nos dois aparelhos)':'TURN removido')}
 function killPeer(){if(peer){const p=peer;peer=null;try{p.destroy()}catch(e){}}conns=[];hostConn=null}
 const FATAL={'browser-incompatible':1,'invalid-id':1,'invalid-key':1,'ssl-unavailable':1,'unavailable-id':1,'peer-unavailable':1};
 /* reconecta ao servidor de salas sem derrubar a corrida (as conexões de dados continuam vivas) */
@@ -121,7 +125,7 @@ function hostRoom(retry){initA();wake();killPeer();retry=retry||0;
   if(e.type=='unavailable-id'&&!opened&&retry<6){clearTimeout(tm);return hostRoom(retry+1)} /* código já em uso: sorteia outro */
   if(!opened&&(FATAL[e.type]||e.type=='server-error'||e.type=='socket-error')){clearTimeout(tm);return menu('Erro de rede: '+e.type+'. Tente de novo ou troque de rede.')}
   console.warn('peer',e.type)}); /* erros passageiros no meio da corrida NÃO derrubam mais a sala */
- p.on('connection',c=>{c.rx=Date.now();
+ p.on('connection',c=>{c.rx=Date.now();watchIce(c);
   c.on('data',m=>{c.rx=Date.now();if(m.t=='ping')return;
    if(m.t=='hi'){if(conns.includes(c))return;if(lobby.length>=6||mode!='lobby'){c.close();return}c.slot=ns++;conns.push(c);lobby.push({slot:c.slot,ch:m.ch});sendOne(c,{t:'you',slot:c.slot});bc({t:'lobby',l:lobby});lobbyUI()}
    else{hd(m);fwd(c,m)}});
@@ -131,24 +135,24 @@ function joinRoom(relay){initA();wake();const code=relay?lastCode:$('code').valu
  const p=new Peer(undefined,mkPO(!!relay));peer=p;let up=0,ok=0;
  const fail=m=>{if(peer===p&&!ok)menu(m)};
  /* se não conectar direto em 9s (comum quando os dois estão no mesmo Wi-Fi/roteador), tenta de novo forçando o servidor TURN */
- const tm=setTimeout(()=>{if(peer!==p||ok)return;if(!relay)joinRoom(1);else fail('Não consegui entrar na sala. Confira o código e se o anfitrião já criou a sala.')},relay?20000:9000);
+ const tm=setTimeout(()=>{if(peer!==p||ok)return;if(!relay){lastIce1=iceInfo(hostConn);joinRoom(1)}else fail('Não consegui entrar na sala. Direta: ['+lastIce1+'] · Retransmissão: ['+iceInfo(hostConn)+']. Se relay for 0, o servidor TURN gratuito não está respondendo: use um TURN próprio (⚙ abaixo).')},relay?22000:12000);
  keepSignal(p);
  p.on('error',e=>{if(peer!==p)return;
   if(!ok){clearTimeout(tm);return fail(e.type=='peer-unavailable'?'Sala não encontrada. Confira o código e se o anfitrião já criou a sala.':'Não conectou: '+e.type)}
   console.warn('peer',e.type)});
  let tries=0;
- const dial=()=>{const c=hostConn=p.connect('tak-'+code,{reliable:true});
+ const dial=()=>{const c=hostConn=p.connect('tak-'+code,{reliable:true});watchIce(c);
   c.on('open',()=>{ok=1;clearTimeout(tm);lastRx=Date.now();nb('');sendOne(c,{t:'hi',ch:sel})});
   c.on('data',m=>{lastRx=Date.now();hd(m)});
   c.on('close',()=>{if(peer!==p||hostConn!==c)return;const st=c.peerConnection?c.peerConnection.iceConnectionState:'?';
    if(mode=='lobby'&&tries<4&&!p.destroyed&&!p.disconnected){tries++;nb('Reconectando… ('+tries+')');setTimeout(()=>{if(peer===p&&hostConn===c)dial()},800);return}
-   menu('A conexão caiu (estado: '+st+'). Se repetir, me diga este texto.')});
+   menu('A conexão caiu (estado: '+st+'; '+iceInfo(c)+').')});
   c.on('error',e=>console.warn('conn',e))};
  p.on('open',()=>{if(up)return;up=1;ui.innerHTML='<h1>Conectando…</h1><div>Servidor ok, abrindo conexão com a sala…</div>';dial()})}
 function goMP(){const l=lobby.slice(),m={t:'go',tr:cur,l};bc(m);startRace(cur,l.map(p=>({slot:p.slot,ch:p.ch,mine:p.slot==0,me:p.slot==0})))}
 /* ===== MENUS ===== */
 function menu(msg){const v=($('code')||{}).value||'';killPeer();nb('');relWake();host=false;mode='menu';stopM();$('tc').style.display='none';res.style.display='none';ui.style.display='flex';
- ui.innerHTML=`<h1>🏁 TURBO AMIGOS KART</h1><div>Escolha seu piloto</div><div class=row>${CH.map((c,i)=>`<div class="card ${i==sel?'on':''}" onclick="sel=${i};menu()"><img src="${FACES[i]}"><br>${c.n}</div>`).join('')}</div><div>Escolha a pista</div><div class=row>${TR.map((t,i)=>`<div class="trk ${i==cur?'on':''}" style="background:${t.g};color:${t.night?'#fff':'#222'}" onclick="cur=${i};menu()">${t.n}</div>`).join('')}</div><div class=row><button onclick="solo()">🏎️ Jogar sozinho (contra CPUs)</button><button class=alt onclick="hostRoom()">🌐 Criar sala</button></div><div class=row><input id=code maxlength=4 placeholder="CÓDIGO" value="${v}"><button class=alt onclick="joinRoom()">Entrar na sala</button></div><small>${msg||'Setas ou WASD dirigem · Espaço usa o poder · M liga/desliga a música · V troca a câmera'}</small>`}
+ ui.innerHTML=`<h1>🏁 TURBO AMIGOS KART</h1><div>Escolha seu piloto</div><div class=row>${CH.map((c,i)=>`<div class="card ${i==sel?'on':''}" onclick="sel=${i};menu()"><img src="${FACES[i]}"><br>${c.n}</div>`).join('')}</div><div>Escolha a pista</div><div class=row>${TR.map((t,i)=>`<div class="trk ${i==cur?'on':''}" style="background:${t.g};color:${t.night?'#fff':'#222'}" onclick="cur=${i};menu()">${t.n}</div>`).join('')}</div><div class=row><button onclick="solo()">🏎️ Jogar sozinho (contra CPUs)</button><button class=alt onclick="hostRoom()">🌐 Criar sala</button></div><div class=row><input id=code maxlength=4 placeholder="CÓDIGO" value="${v}"><button class=alt onclick="joinRoom()">Entrar na sala</button></div><details style="max-width:92vw"><summary>⚙ Servidor TURN próprio (se não conectar na mesma rede)</summary><div class=row style="margin-top:8px"><input id=tu style="width:230px;text-transform:none" placeholder="turn:SEU.metered.live:443?transport=tcp" value="${SAVED?SAVED.u:''}"><input id=tn style="text-transform:none" placeholder="usuário" value="${SAVED?SAVED.n:''}"><input id=tp style="text-transform:none" placeholder="senha" value="${SAVED?SAVED.p:''}"><button class=alt onclick="saveTurn()">Salvar</button></div></details><small>${msg||'Setas ou WASD dirigem · Espaço usa o poder · M liga/desliga a música · V troca a câmera'}</small>`}
 function lobbyUI(){mode='lobby';ui.style.display='flex';
  ui.innerHTML=`<h1>Sala ${roomCode}</h1><div>Passe este código para os amigos (até 6 pilotos)</div><div class=row>${lobby.map(p=>`<div class=card><img src="${FACES[p.ch]}"><br>${CH[p.ch].n}${p.slot==slot?' (você)':''}</div>`).join('')}</div>${host?`<div>Pista</div><div class=row>${TR.map((t,i)=>`<div class="trk ${i==cur?'on':''}" style="background:${t.g};color:${t.night?'#fff':'#222'}" onclick="cur=${i};lobbyUI()">${t.n}</div>`).join('')}</div><button onclick="goMP()">▶ Largar!</button>`:'<div>Aguardando o anfitrião largar…</div>'}<button class=alt onclick="menu()">Sair</button>`}
 function solo(){initA();slot=0;const o=CH.map((_,i)=>i).filter(i=>i!=sel).sort(()=>Math.random()-.5),l=[{slot:0,ch:sel,mine:1,me:1}];for(let i=0;i<5;i++)l.push({slot:i+1,ch:o[i],mine:1,bot:1});startRace(cur,l)}
