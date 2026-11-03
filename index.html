@@ -136,11 +136,15 @@ function joinRoom(relay){initA();wake();const code=relay?lastCode:$('code').valu
  p.on('error',e=>{if(peer!==p)return;
   if(!ok){clearTimeout(tm);return fail(e.type=='peer-unavailable'?'Sala não encontrada. Confira o código e se o anfitrião já criou a sala.':'Não conectou: '+e.type)}
   console.warn('peer',e.type)});
- p.on('open',()=>{if(up)return;up=1;ui.innerHTML='<h1>Conectando…</h1><div>Servidor ok, abrindo conexão com a sala…</div>';
-  const c=hostConn=p.connect('tak-'+code,{reliable:true,serialization:'json'});
-  c.on('open',()=>{ok=1;clearTimeout(tm);lastRx=Date.now();sendOne(c,{t:'hi',ch:sel})});
+ let tries=0;
+ const dial=()=>{const c=hostConn=p.connect('tak-'+code,{reliable:true});
+  c.on('open',()=>{ok=1;clearTimeout(tm);lastRx=Date.now();nb('');sendOne(c,{t:'hi',ch:sel})});
   c.on('data',m=>{lastRx=Date.now();hd(m)});
-  c.on('close',()=>{if(peer===p)menu('A sala foi encerrada ou a conexão caiu.')});c.on('error',()=>{})})}
+  c.on('close',()=>{if(peer!==p||hostConn!==c)return;const st=c.peerConnection?c.peerConnection.iceConnectionState:'?';
+   if(mode=='lobby'&&tries<4&&!p.destroyed&&!p.disconnected){tries++;nb('Reconectando… ('+tries+')');setTimeout(()=>{if(peer===p&&hostConn===c)dial()},800);return}
+   menu('A conexão caiu (estado: '+st+'). Se repetir, me diga este texto.')});
+  c.on('error',e=>console.warn('conn',e))};
+ p.on('open',()=>{if(up)return;up=1;ui.innerHTML='<h1>Conectando…</h1><div>Servidor ok, abrindo conexão com a sala…</div>';dial()})}
 function goMP(){const l=lobby.slice(),m={t:'go',tr:cur,l};bc(m);startRace(cur,l.map(p=>({slot:p.slot,ch:p.ch,mine:p.slot==0,me:p.slot==0})))}
 /* ===== MENUS ===== */
 function menu(msg){const v=($('code')||{}).value||'';killPeer();nb('');relWake();host=false;mode='menu';stopM();$('tc').style.display='none';res.style.display='none';ui.style.display='flex';
