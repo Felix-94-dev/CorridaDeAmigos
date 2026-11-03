@@ -53,7 +53,14 @@ TR.forEach(t=>{const P=t.p,n=P.length,d=[],cr=(a,b,c,e,u)=>.5*(2*b+(-a+c)*u+(2*a
  const xs=S.map(p=>p[0]),ys=S.map(p=>p[1]),b=t.bb=[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)],r=rng(t.sd);t.D=[];
  for(let i=0;i<500;i++){const x=b[0]-300+r()*(b[2]-b[0]+600),y=b[1]-300+r()*(b[3]-b[1]+600);let ok=1;for(let j=0;j<N;j+=2){const p=S[j];if((p[0]-x)**2+(p[1]-y)**2<(t.w+50)**2){ok=0;break}}if(ok)t.D.push([x,y,12+r()*16])}});
 let cur=0,sel=3,mode='menu',K=[],me,T,S,N,t0=0,rt=0,cdn=0,HZ=[],PJ=[],BX=[],cam=0,flash=0,pid=0,last=0,sendT=0,resT=0,keys={},useReq=0;
-const PO={config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'},{urls:'turn:eu-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:'turn:us-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}]}};
+/* ===== CONFIG DE REDE =====
+ Para ficar bem estável, crie uma conta GRÁTIS em metered.ca (ou Cloudflare Calls TURN) e cole aqui suas credenciais TURN.
+ Ex.: const MY_TURN=[{urls:['turn:SEU-APP.metered.live:80','turn:SEU-APP.metered.live:443?transport=tcp'],username:'USUARIO',credential:'SENHA'}];
+ Servidores públicos gratuitos são compartilhados e podem falhar em horário de pico. */
+const MY_TURN=null;
+const SIGNAL=null; /* null = servidor de salas gratuito do PeerJS. Se tiver o seu: {host:'seu.servidor',port:443,path:'/',secure:true} */
+const ICE=[...(MY_TURN||[]),{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'},{urls:'turn:eu-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:'turn:us-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}];
+const mkPO=relay=>({...(SIGNAL||{}),debug:0,config:{iceServers:ICE,iceCandidatePoolSize:4,iceTransportPolicy:relay?'relay':'all'}});
 let peer,conns=[],host=false,hostConn,slot=0,lobby=[],roomCode='',ns=1;
 /* ===== AUDIO ===== */
 let AC,mute=0,tmr,mi=0,nx=0,NB;
@@ -69,11 +76,31 @@ function music(n){stopM();if(mute||!AC)return;const t=TR[n],sp=30/t.bpm,r=rng(n*
  mi=0;nx=AC.currentTime+.1;
  tmr=setInterval(()=>{while(nx<AC.currentTime+.2){const i=mi%32;note(mel[i],nx,sp*.9,t.wv,.07);if(i%2==0)note(t.root-24+[0,0,sc[2],sc[3]][(i>>1)%4],nx,sp*1.8,'triangle',.16);if(i%4==0)kick(nx);if(i%2)hat(nx);mi++;nx+=sp}},30)}
 /* ===== REDE (PeerJS) ===== */
-const send=m=>{if(!peer)return;if(host)conns.forEach(c=>c.open&&c.send(m));else hostConn&&hostConn.open&&hostConn.send(m)};
-const bc=m=>conns.forEach(c=>c.open&&c.send(m));
+let lastRx=0,wl=null,lastCode='';
+const sendOne=(c,m)=>{try{c.send(m)}catch(e){}};
+const congested=c=>!!(c.dataChannel&&c.dataChannel.bufferedAmount>16000);
+/* lossy=1: posições; se o canal estiver engarrafado, descarta em vez de acumular atraso */
+const send=(m,lossy)=>{if(!peer)return;(host?conns:[hostConn]).forEach(c=>{if(c&&c.open&&!(lossy&&congested(c)))sendOne(c,m)})};
+const bc=m=>conns.forEach(c=>c.open&&sendOne(c,m));
+const fwd=(from,m)=>conns.forEach(o=>{if(o!==from&&o.open&&!(m.t=='s'&&congested(o)))sendOne(o,m)});
+const nbEl=document.createElement('div');nbEl.style.cssText='position:fixed;top:6px;left:50%;transform:translateX(-50%);z-index:99;background:#c0392b;color:#fff;padding:4px 12px;border-radius:12px;font:700 13px sans-serif;display:none;pointer-events:none';document.documentElement.appendChild(nbEl);
+const nb=m=>{nbEl.textContent=m;nbEl.style.display=m?'block':'none'};
+async function wake(){try{if('wakeLock' in navigator&&!wl){wl=await navigator.wakeLock.request('screen');wl.addEventListener('release',()=>{wl=null})}}catch(e){}}
+function relWake(){try{wl&&wl.release()}catch(e){}wl=null}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&peer)wake()});
+function killPeer(){if(peer){const p=peer;peer=null;try{p.destroy()}catch(e){}}conns=[];hostConn=null}
+const FATAL={'browser-incompatible':1,'invalid-id':1,'invalid-key':1,'ssl-unavailable':1,'unavailable-id':1,'peer-unavailable':1};
+/* reconecta ao servidor de salas sem derrubar a corrida (as conexões de dados continuam vivas) */
+function keepSignal(p){p.on('disconnected',()=>{let n=0;const t=()=>{if(peer!==p||p.destroyed||!p.disconnected)return;try{p.reconnect()}catch(e){}setTimeout(t,Math.min(8000,1000*++n))};setTimeout(t,400)})}
+function drop(c){if(c.slot==null||!conns.includes(c))return;conns=conns.filter(o=>o!==c);if(mode=='lobby'){lobby=lobby.filter(p=>p.slot!=c.slot);bc({t:'lobby',l:lobby});lobbyUI()}else{const x={t:'x',s:c.slot};hd(x);bc(x)}}
+/* batimento: mantém a conexão viva e detecta queda real (>25s sem notícias) */
+setInterval(()=>{if(!peer)return;const now=Date.now();send({t:'ping'});
+ if(host)conns.slice().forEach(c=>{if(now-c.rx>25000){try{c.close()}catch(e){}drop(c)}});
+ else if(hostConn&&hostConn.open){const d=now-lastRx;nb(d>5000?'⚠ Conexão instável… '+(d/1000|0)+'s':'');if(d>25000)menu('Conexão com a sala perdida. Entre de novo com o mesmo código.')}},2000);
 function zap(s){K.forEach(k=>{if(k.slot!=s&&k.mine){k.slow=3;k.spin=.6}});flash=.5;bp(40,.4,'sawtooth')}
 function hd(m){
- if(m.t=='lobby'){lobby=m.l;lobbyUI()}
+ if(m.t=='ping')return
+ else if(m.t=='lobby'){lobby=m.l;lobbyUI()}
  else if(m.t=='you')slot=m.slot
  else if(m.t=='go')startRace(m.tr,m.l.map(p=>({slot:p.slot,ch:p.ch,mine:p.slot==slot,me:p.slot==slot})))
  else if(mode=='lobby')return
@@ -84,20 +111,39 @@ function hd(m){
  else if(m.t=='z')zap(m.s)
  else if(m.t=='f'){const k=K.find(k=>k.slot==m.s);if(k){k.fin=1;k.ft=m.ft}}
  else if(m.t=='x'){const k=K.find(k=>k.slot==m.s);if(k)k.left=1}}
-function hostRoom(){initA();roomCode=Array.from({length:4},()=>'ABCDEFGHJKMNPQRSTUVWXYZ'[Math.random()*23|0]).join('');ui.innerHTML='<h1>Criando sala…</h1>';
- peer=new Peer('tak-'+roomCode,PO);const p0=peer;setTimeout(()=>{if(peer===p0&&mode!='lobby')menu('Não consegui falar com o servidor de salas. Troque de rede (Wi-Fi/4G) e tente de novo.')},12000);host=true;slot=0;ns=1;lobby=[{slot:0,ch:sel}];conns=[];
- peer.on('open',()=>lobbyUI());peer.on('error',e=>menu('Erro de rede: '+e.type));
- peer.on('connection',c=>{c.on('data',m=>{
-  if(m.t=='hi'){if(lobby.length>=6||mode!='lobby'){c.close();return}c.slot=ns++;conns.push(c);lobby.push({slot:c.slot,ch:m.ch});c.send({t:'you',slot:c.slot});bc({t:'lobby',l:lobby});lobbyUI()}
-  else{hd(m);conns.forEach(o=>o!==c&&o.open&&o.send(m))}});
-  c.on('close',()=>{conns=conns.filter(o=>o!==c);if(mode=='lobby'){lobby=lobby.filter(p=>p.slot!=c.slot);bc({t:'lobby',l:lobby});lobbyUI()}else{const x={t:'x',s:c.slot};hd(x);bc(x)}})})}
-function joinRoom(){initA();const code=$('code').value.trim().toUpperCase();if(code.length<4)return menu('Digite o código de 4 letras da sala');
- ui.innerHTML='<h1>Conectando…</h1>';roomCode=code;host=false;lobby=[];peer=new Peer(undefined,PO);const p0=peer;setTimeout(()=>{if(peer===p0&&mode!='lobby')menu('Não consegui entrar na sala. Confira o código e se o anfitrião já criou a sala. Se continuar, tentem no mesmo Wi-Fi ou troquem de rede.')},20000);
- peer.on('error',e=>menu(e.type=='peer-unavailable'?'Sala não encontrada. Confira o código e se o anfitrião já criou a sala.':'Não conectou: '+e.type));
- peer.on('open',()=>{ui.innerHTML='<h1>Conectando…</h1><div>Servidor ok, abrindo conexão com a sala…</div>';hostConn=peer.connect('tak-'+code,{reliable:true});hostConn.on('open',()=>hostConn.send({t:'hi',ch:sel}));hostConn.on('data',hd);hostConn.on('close',()=>menu('A sala foi encerrada'))})}
+function hostRoom(retry){initA();wake();killPeer();retry=retry||0;
+ roomCode=Array.from({length:4},()=>'ABCDEFGHJKMNPQRSTUVWXYZ'[Math.random()*23|0]).join('');ui.innerHTML='<h1>Criando sala…</h1>';
+ const p=new Peer('tak-'+roomCode,mkPO(false));peer=p;host=true;slot=0;ns=1;lobby=[{slot:0,ch:sel}];conns=[];let opened=0;
+ const tm=setTimeout(()=>{if(peer===p&&!opened)menu('Não consegui falar com o servidor de salas. Troque de rede (Wi-Fi/4G) e tente de novo.')},15000);
+ p.on('open',()=>{if(opened)return;opened=1;clearTimeout(tm);lobbyUI()}); /* 'open' dispara de novo a cada reconexão: só o primeiro conta */
+ keepSignal(p);
+ p.on('error',e=>{if(peer!==p)return;
+  if(e.type=='unavailable-id'&&!opened&&retry<6){clearTimeout(tm);return hostRoom(retry+1)} /* código já em uso: sorteia outro */
+  if(!opened&&(FATAL[e.type]||e.type=='server-error'||e.type=='socket-error')){clearTimeout(tm);return menu('Erro de rede: '+e.type+'. Tente de novo ou troque de rede.')}
+  console.warn('peer',e.type)}); /* erros passageiros no meio da corrida NÃO derrubam mais a sala */
+ p.on('connection',c=>{c.rx=Date.now();
+  c.on('data',m=>{c.rx=Date.now();if(m.t=='ping')return;
+   if(m.t=='hi'){if(conns.includes(c))return;if(lobby.length>=6||mode!='lobby'){c.close();return}c.slot=ns++;conns.push(c);lobby.push({slot:c.slot,ch:m.ch});sendOne(c,{t:'you',slot:c.slot});bc({t:'lobby',l:lobby});lobbyUI()}
+   else{hd(m);fwd(c,m)}});
+  c.on('close',()=>drop(c));c.on('error',()=>{})})}
+function joinRoom(relay){initA();wake();const code=relay?lastCode:$('code').value.trim().toUpperCase();if(code.length<4)return menu('Digite o código de 4 letras da sala');
+ lastCode=code;killPeer();ui.innerHTML='<h1>Conectando…</h1>'+(relay?'<div>Rede difícil: usando o servidor de retransmissão…</div>':'');roomCode=code;host=false;lobby=[];
+ const p=new Peer(undefined,mkPO(!!relay));peer=p;let up=0,ok=0;
+ const fail=m=>{if(peer===p&&!ok)menu(m)};
+ /* se não conectar direto em 9s (comum quando os dois estão no mesmo Wi-Fi/roteador), tenta de novo forçando o servidor TURN */
+ const tm=setTimeout(()=>{if(peer!==p||ok)return;if(!relay)joinRoom(1);else fail('Não consegui entrar na sala. Confira o código e se o anfitrião já criou a sala.')},relay?20000:9000);
+ keepSignal(p);
+ p.on('error',e=>{if(peer!==p)return;
+  if(!ok){clearTimeout(tm);return fail(e.type=='peer-unavailable'?'Sala não encontrada. Confira o código e se o anfitrião já criou a sala.':'Não conectou: '+e.type)}
+  console.warn('peer',e.type)});
+ p.on('open',()=>{if(up)return;up=1;ui.innerHTML='<h1>Conectando…</h1><div>Servidor ok, abrindo conexão com a sala…</div>';
+  const c=hostConn=p.connect('tak-'+code,{reliable:true,serialization:'json'});
+  c.on('open',()=>{ok=1;clearTimeout(tm);lastRx=Date.now();sendOne(c,{t:'hi',ch:sel})});
+  c.on('data',m=>{lastRx=Date.now();hd(m)});
+  c.on('close',()=>{if(peer===p)menu('A sala foi encerrada ou a conexão caiu.')});c.on('error',()=>{})})}
 function goMP(){const l=lobby.slice(),m={t:'go',tr:cur,l};bc(m);startRace(cur,l.map(p=>({slot:p.slot,ch:p.ch,mine:p.slot==0,me:p.slot==0})))}
 /* ===== MENUS ===== */
-function menu(msg){const v=($('code')||{}).value||'';if(peer){const p=peer;peer=null;try{p.destroy()}catch(e){}}host=false;mode='menu';stopM();$('tc').style.display='none';res.style.display='none';ui.style.display='flex';
+function menu(msg){const v=($('code')||{}).value||'';killPeer();nb('');relWake();host=false;mode='menu';stopM();$('tc').style.display='none';res.style.display='none';ui.style.display='flex';
  ui.innerHTML=`<h1>🏁 TURBO AMIGOS KART</h1><div>Escolha seu piloto</div><div class=row>${CH.map((c,i)=>`<div class="card ${i==sel?'on':''}" onclick="sel=${i};menu()"><img src="${FACES[i]}"><br>${c.n}</div>`).join('')}</div><div>Escolha a pista</div><div class=row>${TR.map((t,i)=>`<div class="trk ${i==cur?'on':''}" style="background:${t.g};color:${t.night?'#fff':'#222'}" onclick="cur=${i};menu()">${t.n}</div>`).join('')}</div><div class=row><button onclick="solo()">🏎️ Jogar sozinho (contra CPUs)</button><button class=alt onclick="hostRoom()">🌐 Criar sala</button></div><div class=row><input id=code maxlength=4 placeholder="CÓDIGO" value="${v}"><button class=alt onclick="joinRoom()">Entrar na sala</button></div><small>${msg||'Setas ou WASD dirigem · Espaço usa o poder · M liga/desliga a música · V troca a câmera'}</small>`}
 function lobbyUI(){mode='lobby';ui.style.display='flex';
  ui.innerHTML=`<h1>Sala ${roomCode}</h1><div>Passe este código para os amigos (até 6 pilotos)</div><div class=row>${lobby.map(p=>`<div class=card><img src="${FACES[p.ch]}"><br>${CH[p.ch].n}${p.slot==slot?' (você)':''}</div>`).join('')}</div>${host?`<div>Pista</div><div class=row>${TR.map((t,i)=>`<div class="trk ${i==cur?'on':''}" style="background:${t.g};color:${t.night?'#fff':'#222'}" onclick="cur=${i};lobbyUI()">${t.n}</div>`).join('')}</div><button onclick="goMP()">▶ Largar!</button>`:'<div>Aguardando o anfitrião largar…</div>'}<button class=alt onclick="menu()">Sair</button>`}
@@ -146,7 +192,7 @@ function update(dt){const go=mode=='race';
  for(let i=0;i<K.length;i++)for(let j=i+1;j<K.length;j++){const a=K[i],b=K[j];if(a.left||b.left)continue;const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy);if(d<30&&d>0){const o=(30-d)/2,nx=dx/d,ny=dy/d;if(a.mine){a.x-=nx*o;a.y-=ny*o;a.v*=.98}if(b.mine){b.x+=nx*o;b.y+=ny*o;b.v*=.98}}}
  PJ.forEach(p=>{p.t-=dt;const q=S[(p.idx+1)%N];if((q[0]-p.x)**2+(q[1]-p.y)**2<900)p.idx=(p.idx+1)%N;const g=S[(p.idx+4)%N],d=Math.hypot(g[0]-p.x,g[1]-p.y)||1;p.x+=(g[0]-p.x)/d*440*dt;p.y+=(g[1]-p.y)/d*440*dt});
  PJ=PJ.filter(p=>p.t>0&&!p.dead);HZ=HZ.filter(h=>!h.dead);BX.forEach(b=>b.t-=dt);flash-=dt;
- if(go&&performance.now()-sendT>66){sendT=performance.now();send({t:'s',s:me.slot,x:me.x|0,y:me.y|0,a:+me.a.toFixed(2),v:me.v|0,l:me.lap,i:me.idx,b:me.boost>0,sp:me.spin>0})}
+ if(go&&performance.now()-sendT>66){sendT=performance.now();send({t:'s',s:me.slot,x:me.x|0,y:me.y|0,a:+me.a.toFixed(2),v:me.v|0,l:me.lap,i:me.idx,b:me.boost>0,sp:me.spin>0},1)}
  if(me.fin){if(res.style.display!='block'||performance.now()-resT>1500){resT=performance.now();showRes()}}}
 /* ===== DESENHO ===== */
 const em=(c,x,y,s)=>{ctx.save();ctx.translate(x,y);ctx.rotate(Math.PI/2+cam);ctx.font=s+'px serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(c,0,0);ctx.restore()};
