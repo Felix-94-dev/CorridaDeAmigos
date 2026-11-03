@@ -53,6 +53,7 @@ TR.forEach(t=>{const P=t.p,n=P.length,d=[],cr=(a,b,c,e,u)=>.5*(2*b+(-a+c)*u+(2*a
  const xs=S.map(p=>p[0]),ys=S.map(p=>p[1]),b=t.bb=[Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)],r=rng(t.sd);t.D=[];
  for(let i=0;i<500;i++){const x=b[0]-300+r()*(b[2]-b[0]+600),y=b[1]-300+r()*(b[3]-b[1]+600);let ok=1;for(let j=0;j<N;j+=2){const p=S[j];if((p[0]-x)**2+(p[1]-y)**2<(t.w+50)**2){ok=0;break}}if(ok)t.D.push([x,y,12+r()*16])}});
 let cur=0,sel=3,mode='menu',K=[],me,T,S,N,t0=0,rt=0,cdn=0,HZ=[],PJ=[],BX=[],cam=0,flash=0,pid=0,last=0,sendT=0,resT=0,keys={},useReq=0;
+const PO={config:{iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'},{urls:'turn:eu-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:'turn:us-0.turn.peerjs.com:3478',username:'peerjs',credential:'peerjsp'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}]}};
 let peer,conns=[],host=false,hostConn,slot=0,lobby=[],roomCode='',ns=1;
 /* ===== AUDIO ===== */
 let AC,mute=0,tmr,mi=0,nx=0,NB;
@@ -84,16 +85,16 @@ function hd(m){
  else if(m.t=='f'){const k=K.find(k=>k.slot==m.s);if(k){k.fin=1;k.ft=m.ft}}
  else if(m.t=='x'){const k=K.find(k=>k.slot==m.s);if(k)k.left=1}}
 function hostRoom(){initA();roomCode=Array.from({length:4},()=>'ABCDEFGHJKMNPQRSTUVWXYZ'[Math.random()*23|0]).join('');ui.innerHTML='<h1>Criando sala…</h1>';
- peer=new Peer('tak-'+roomCode);host=true;slot=0;ns=1;lobby=[{slot:0,ch:sel}];conns=[];
+ peer=new Peer('tak-'+roomCode,PO);const p0=peer;setTimeout(()=>{if(peer===p0&&mode!='lobby')menu('Não consegui falar com o servidor de salas. Troque de rede (Wi-Fi/4G) e tente de novo.')},12000);host=true;slot=0;ns=1;lobby=[{slot:0,ch:sel}];conns=[];
  peer.on('open',()=>lobbyUI());peer.on('error',e=>menu('Erro de rede: '+e.type));
  peer.on('connection',c=>{c.on('data',m=>{
   if(m.t=='hi'){if(lobby.length>=6||mode!='lobby'){c.close();return}c.slot=ns++;conns.push(c);lobby.push({slot:c.slot,ch:m.ch});c.send({t:'you',slot:c.slot});bc({t:'lobby',l:lobby});lobbyUI()}
   else{hd(m);conns.forEach(o=>o!==c&&o.open&&o.send(m))}});
   c.on('close',()=>{conns=conns.filter(o=>o!==c);if(mode=='lobby'){lobby=lobby.filter(p=>p.slot!=c.slot);bc({t:'lobby',l:lobby});lobbyUI()}else{const x={t:'x',s:c.slot};hd(x);bc(x)}})})}
 function joinRoom(){initA();const code=$('code').value.trim().toUpperCase();if(code.length<4)return menu('Digite o código de 4 letras da sala');
- ui.innerHTML='<h1>Conectando…</h1>';roomCode=code;host=false;lobby=[];peer=new Peer();
- peer.on('error',e=>menu('Não conectou: '+e.type));
- peer.on('open',()=>{hostConn=peer.connect('tak-'+code,{reliable:true});hostConn.on('open',()=>hostConn.send({t:'hi',ch:sel}));hostConn.on('data',hd);hostConn.on('close',()=>menu('A sala foi encerrada'))})}
+ ui.innerHTML='<h1>Conectando…</h1>';roomCode=code;host=false;lobby=[];peer=new Peer(undefined,PO);const p0=peer;setTimeout(()=>{if(peer===p0&&mode!='lobby')menu('Não consegui entrar na sala. Confira o código e se o anfitrião já criou a sala. Se continuar, tentem no mesmo Wi-Fi ou troquem de rede.')},20000);
+ peer.on('error',e=>menu(e.type=='peer-unavailable'?'Sala não encontrada. Confira o código e se o anfitrião já criou a sala.':'Não conectou: '+e.type));
+ peer.on('open',()=>{ui.innerHTML='<h1>Conectando…</h1><div>Servidor ok, abrindo conexão com a sala…</div>';hostConn=peer.connect('tak-'+code,{reliable:true});hostConn.on('open',()=>hostConn.send({t:'hi',ch:sel}));hostConn.on('data',hd);hostConn.on('close',()=>menu('A sala foi encerrada'))})}
 function goMP(){const l=lobby.slice(),m={t:'go',tr:cur,l};bc(m);startRace(cur,l.map(p=>({slot:p.slot,ch:p.ch,mine:p.slot==0,me:p.slot==0})))}
 /* ===== MENUS ===== */
 function menu(msg){const v=($('code')||{}).value||'';if(peer){const p=peer;peer=null;try{p.destroy()}catch(e){}}host=false;mode='menu';stopM();$('tc').style.display='none';res.style.display='none';ui.style.display='flex';
